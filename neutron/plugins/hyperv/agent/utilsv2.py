@@ -175,6 +175,10 @@ class HyperVUtilsV2(utils.HyperVUtils):
             port_alloc.path_(), [vlan_settings.GetText_(1)])
         self._check_job_status(ret_val, job_path)
 
+    def set_switch_external_port_trunk_vlan(self, vswitch_name, vlan_id,
+                                            desired_endpoint_mode):
+        pass
+
     def _get_vlan_setting_data_from_port_alloc(self, port_alloc):
         return self._get_first_item(port_alloc.associators(
             wmi_result_class=self._PORT_VLAN_SET_DATA))
