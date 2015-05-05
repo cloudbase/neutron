@@ -935,6 +935,9 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                              priority=0,
                              actions="drop")
 
+        self.tun_br.add_port(constants.OVS_PORT_INTERNAL)
+        self.tun_br.add_port(constants.OVS_PORT_EXTERNAL)
+
     def get_peer_name(self, prefix, name):
         """Construct a peer name based on the prefix and name.
 
@@ -1178,6 +1181,17 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         self.tun_br_ofports[tunnel_type][remote_ip] = ofport
         # Add flow in default table to resubmit to the right
         # tunnelling table (lvid will be set in the latter)
+
+        internal_ofport = self.tun_br.get_port_ofport(
+            constants.OVS_PORT_INTERNAL)
+        external_ofport = self.tun_br.get_port_ofport(
+            constants.OVS_PORT_EXTERNAL)
+
+        self.tun_br.add_flow(priority=1, in_port=external_ofport,
+                             actions='output:%s' % internal_ofport)
+        self.tun_br.add_flow(priority=1, in_port=internal_ofport,
+                             actions='output:%s' % external_ofport)
+
         br.add_flow(priority=1,
                     in_port=ofport,
                     actions="resubmit(,%s)" %
