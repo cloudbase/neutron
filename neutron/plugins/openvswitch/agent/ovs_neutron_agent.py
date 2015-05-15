@@ -859,6 +859,19 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             exit(1)
         self.tun_br.remove_all_flows()
 
+        self.tun_br.add_port(constants.OVS_PORT_INTERNAL)
+        self.tun_br.add_port(constants.OVS_PORT_EXTERNAL)
+
+        internal_ofport = self.tun_br.get_port_ofport(
+            constants.OVS_PORT_INTERNAL)
+        external_ofport = self.tun_br.get_port_ofport(
+            constants.OVS_PORT_EXTERNAL)
+
+        self.tun_br.add_flow(priority=1, in_port=external_ofport,
+                             actions='output:%s' % internal_ofport)
+        self.tun_br.add_flow(priority=1, in_port=internal_ofport,
+                             actions='output:%s' % external_ofport)
+
     def setup_tunnel_br(self):
         '''Setup the tunnel bridge.
 
