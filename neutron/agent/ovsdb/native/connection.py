@@ -13,6 +13,7 @@
 #    under the License.
 
 import os
+import sys
 import threading
 import traceback
 
@@ -25,32 +26,62 @@ from six.moves import queue as Queue
 from neutron._i18n import _
 from neutron.agent.ovsdb.native import idlutils
 
+if sys.platform == 'win32':
+    # The following module is needed only on Windows. It contains all the
+    # operations on named pipes which are nonblocking.
+    from neutron.agent.windows import ovsdb_utils as ovsdb_winutils
+
 
 class TransactionQueue(Queue.Queue, object):
     def __init__(self, *args, **kwargs):
         super(TransactionQueue, self).__init__(*args, **kwargs)
-        alertpipe = os.pipe()
-        # NOTE(ivasilevskaya) python 3 doesn't allow unbuffered I/O. Will get
-        # around this constraint by using binary mode.
-        self.alertin = os.fdopen(alertpipe[0], 'rb', 0)
-        self.alertout = os.fdopen(alertpipe[1], 'wb', 0)
+        if sys.platform != 'win32':
+            alertpipe = os.pipe()
+            # NOTE(ivasilevskaya) python 3 doesn't allow unbuffered I/O.
+            # Will get around this constraint by using binary mode.
+            self.alertin = os.fdopen(alertpipe[0], 'rb', 0)
+            self.alertout = os.fdopen(alertpipe[1], 'wb', 0)
+        else:
+            # Create the named pipe which has all the nonblocking methods
+            # defined in the NamedPipe class
+            self.alertpipe = ovsdb_winutils.NamedPipe(
+                pipe_name="TransactionQueuePipeName")
+            # Create and connect the named pipe
+            self.alertpipe.connect()
+            self.alertpipe.create_file()
+            self.alertpipe.wait_for_connection()
 
     def get_nowait(self, *args, **kwargs):
         try:
             result = super(TransactionQueue, self).get_nowait(*args, **kwargs)
         except Queue.Empty:
             return None
-        self.alertin.read(1)
+        if sys.platform != 'win32':
+            self.alertin.read(1)
+        else:
+            self.alertpipe.wait_for_read()
+            self.alertpipe.get_read_result()
+            # Associate the read operation with the overlapped structure in
+            # order to be able to wait for the event which will tell us when
+            # the operation has completed.
+            self.alertpipe.nonblocking_read(bytes_to_read=1)
         return result
 
     def put(self, *args, **kwargs):
         super(TransactionQueue, self).put(*args, **kwargs)
-        self.alertout.write(six.b('X'))
-        self.alertout.flush()
+        if sys.platform != 'win32':
+            self.alertout.write(six.b('X'))
+            self.alertout.flush()
+        else:
+            # Works both on python 2 and python 3
+            self.alertpipe.blocking_write('X')
 
     @property
     def alert_fileno(self):
-        return self.alertin.fileno()
+        if sys.platform != 'win32':
+            return self.alertin.fileno()
+        else:
+            return self.alertpipe.read_overlapped_event
 
 
 class Connection(object):
@@ -139,13 +170,31 @@ class Connection(object):
             helper.register_all()
 
     def run(self):
+        if sys.platform == 'win32':
+            # Replace the read overlapped event with a new one with automatic
+            # reset and initial state nonsignaled.
+            ovsdb_winutils.winutils.win32file.CloseHandle(
+                self.idl._session.rpc.stream._read.hEvent)
+            self.idl._session.rpc.stream._read.hEvent = (
+                ovsdb_winutils.winutils.get_new_event(bManualReset=False,
+                                                      bInitialState=False))
+            # Associate the read operation with the overlapped structure in
+            # order to be able to wait for the event which will tell us when
+            # the read operation has completed.
+            self.txns.alertpipe.nonblocking_read(bytes_to_read=1)
+
         while True:
             self.idl.wait(self.poller)
             self.poller.fd_wait(self.txns.alert_fileno, poller.POLLIN)
             #TODO(jlibosva): Remove next line once losing connection to ovsdb
             #                is solved.
             self.poller.timer_wait(self.timeout * 1000)
-            self.poller.block()
+            if sys.platform != 'win32':
+                self.poller.block()
+            else:
+                # Ensure that WaitForMultipleObjects will not block other
+                # greenthreads. poller.block uses WaitForMultipleObjects
+                ovsdb_winutils.avoid_blocking_call(self.poller.block)
             self.idl.run()
             txn = self.txns.get_nowait()
             if txn is not None:
