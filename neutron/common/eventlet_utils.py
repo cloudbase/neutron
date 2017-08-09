@@ -20,7 +20,13 @@ from oslo_utils import importutils
 
 
 def monkey_patch():
-    eventlet.monkey_patch()
     if os.name != 'nt':
+        eventlet.monkey_patch()
+
         p_c_e = importutils.import_module('pyroute2.config.asyncio')
         p_c_e.asyncio_config()
+    else:
+        # eventlet monkey patching the os module causes subprocess.Popen to
+        # fail on Windows when using pipes due to missing non-blocking IO
+        # support.
+        eventlet.monkey_patch(os=False)
