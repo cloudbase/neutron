@@ -1419,8 +1419,11 @@ class OVSNeutronAgent(l2population_rpc.L2populationRpcCallBackTunnelMixin,
         ports_not_ready_yet = set()
         # if a port was added and then removed or viceversa since the agent
         # can't know the order of the operations, check the status of the port
-        # to determine if the port was added or deleted
-        added_ports = {p['name'] for p in events['added']}
+        # to determine if the port was added or deleted.
+        # For convenience, we'll add modified ports to the list of added ports
+        # since the processing workflow is the same.
+        added_ports = {p['name']
+                       for p in events['added'] + events['modified']}
         removed_ports = {p['name'] for p in events['removed']}
         ports_removed_and_added = added_ports & removed_ports
         for p in ports_removed_and_added:
